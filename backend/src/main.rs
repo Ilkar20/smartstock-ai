@@ -1,3 +1,4 @@
+mod database;
 mod models;
 mod routes;
 
@@ -8,42 +9,51 @@ use axum::{
 };
 
 use serde::Serialize;
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
 
-use routes::products::{product_routes, ProductStore};
+use routes::products::product_routes;
 
 #[derive(Serialize)]
 struct HealthResponse {
     status: &'static str,
+    service: &'static str,
 }
 
 async fn health_check() -> Json<HealthResponse> {
-    let response = HealthResponse {
+    Json(HealthResponse {
         status: "ok",
-    };
-    Json(response)
+        service: "SmartStock AI",
+    })
 }
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().ok();
+
     tracing_subscriber::fmt::init();
 
-    let store: ProductStore = Arc::new(Mutex::new(Vec::new()));
+    let pool = database::connect_database()
+        .await
+        .expect("Database connection failed");
+
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("Database migration failed");
 
     let app = Router::new()
         .route("/api/health", get(health_check))
-        .merge(product_routes().with_state(store));
+        .merge(product_routes())
+        .with_state(pool);
 
-    let address = SocketAddr::from(([127, 0, 0, 1], 3000));
-    
-    let listener = tokio::net::TcpListener::bind(address)
-        .await
-        .expect("Failed to bind to address");
+    let listener = tokio::net::TcpListener::bind(
+        "127.0.0.1:3000"
+    )
+    .await
+    .expect("Failed to bind address");
 
-    println!("Server running on http://{}", address);
-    
+    println!("SmartStock AI running on http://localhost:3000");
+
     axum::serve(listener, app)
         .await
-        .expect("Failed to start server");
+        .expect("Server error");
 }
